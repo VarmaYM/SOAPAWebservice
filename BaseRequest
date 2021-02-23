@@ -1,0 +1,68 @@
+ public class ProxyBase
+    {
+        protected IConfiguration Configuration { get; }
+        protected ILogger Logger { get; }
+
+        public ProxyBase(IConfiguration configuration, ILogger logger)
+        {
+            Configuration = configuration;
+            Logger = logger;
+        }
+
+        protected T CreateGenericClient<T>(string configKey) where T:class
+        {
+            // First check if endpoint is configured at all
+            var serviceUri = Configuration[$"WebServiceProxy:{configKey}:EndpointAddress"];
+            if (serviceUri == null) return null;
+            
+            var endpoint = new Uri(serviceUri); 
+            var sendTimeout = int.TryParse(Configuration[$"WebServiceProxy:{configKey}:SendTimeout"], out var sendTimeoutResult)
+                ? sendTimeoutResult
+                : (int?)null;
+            var maxResultSize = int.TryParse(Configuration[$"WebServiceProxy:{configKey}:MaxReceivedMessageSize"], out var maxResultSizeResult)
+                ? maxResultSizeResult
+                : (int?)null;
+            Logger?.LogDebug($"Configuring {configKey} web service with URI \"{endpoint}\", timeout {sendTimeout} and MaxResultSize {maxResultSize}");
+            var channelFactory = new ChannelFactory<T>(GetBindingFromUri(endpoint, sendTimeout, maxResultSize), new EndpointAddress(endpoint));
+            channelFactory.Endpoint.EndpointBehaviors.Add(
+                new EndpointBehaviour("CM_KeyID", Configuration[$"WebServiceProxy:{configKey}:ApiKey"], Configuration["WebServiceProxy:LogPath"], configKey));
+            return channelFactory.CreateChannel();
+        }
+
+        protected HttpClient GetHttpClientFor(string configKey)
+        {
+            var httpClient = new HttpClient();
+            httpClient.DefaultRequestHeaders.Add("CM_KeyID", Configuration[$"WebServiceProxy:{configKey}:ApiKey"]);
+            httpClient.Timeout = TimeSpan.FromSeconds(int.TryParse(Configuration[$"WebServiceProxy:{configKey}:SendTimeout"], out var sendTimeoutResult)
+                ? sendTimeoutResult
+                : 30);
+
+            return httpClient;
+        }
+
+        private static Binding GetBindingFromUri(Uri endpoint, int? sendTimeout = null, long? maxReceivedMessageSize = null)
+        {
+            HttpBindingBase binding;
+            if (endpoint.Scheme == Uri.UriSchemeHttps)
+            {
+                binding = new BasicHttpsBinding(BasicHttpsSecurityMode.Transport);
+            }
+            else
+            {
+                binding = new BasicHttpBinding(BasicHttpSecurityMode.None);
+            }
+
+            if (sendTimeout != null)
+            {
+                binding.SendTimeout = new TimeSpan(0, 0, sendTimeout.Value);
+            }
+
+            if (maxReceivedMessageSize != null)
+            {
+                binding.MaxReceivedMessageSize = maxReceivedMessageSize.Value;
+            }
+
+            return binding;
+        }
+    }
+}
